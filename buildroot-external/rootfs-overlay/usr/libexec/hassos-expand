@@ -56,6 +56,13 @@ sfdisk -V "${DEVICE_ROOT}"
 partx -u "${DEVICE_ROOT}"
 udevadm settle
 
+# Resize the F2FS filesystem to fill the expanded partition
+# This must be done BEFORE mounting (F2FS doesn't support online resize)
+echo "[INFO] Resizing F2FS filesystem on ${DEVICE_CHILD}"
+if ! resize.f2fs "${DEVICE_CHILD}"; then
+    echo "[WARNING] Failed to resize F2FS filesystem"
+fi
+
 # Make sure /dev/disk/by-label/hassos-data is actually present before exiting.
 # This avoids a race condition with mnt-data.mount which might fail to bind
 # otherwise:

@@ -6,13 +6,13 @@ After=hassos-expand.service
 Before=umount.target local-fs.target
 Conflicts=umount.target
 After=systemd-fsck@dev-disk-by\x2dlabel-hassos\x2ddata.service
-Wants=systemd-fsck@dev-disk-by\x2dlabel-hassos\x2ddata.service systemd-growfs@mnt-data.service
+Wants=systemd-fsck@dev-disk-by\x2dlabel-hassos\x2ddata.service
 
 [Mount]
 What=/dev/disk/by-label/hassos-data
 Where=/mnt/data
 Type=f2fs
-Options=compress_algorithm=lz4,compress_chksum,compress_extension=*,nocompress_extension=swap,atgc,gc_merge,lazytime,x-systemd.growfs
+Options=compress_algorithm=lz4,compress_chksum,compress_extension=*,nocompress_extension=swap,atgc,gc_merge,lazytime
 
 [Install]
 WantedBy=local-fs.target
