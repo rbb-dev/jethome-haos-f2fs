@@ -10,13 +10,12 @@ set -e
 
 # Init supervisor
 : "${SUPERVISOR_CHANNEL:=stable}"  # allow env override; default to "stable"
-URL_HASSIO_VERSION="https://haversion.jethome.com/${SUPERVISOR_CHANNEL}.json"
+URL_HASSIO_VERSION="https://raw.githubusercontent.com/rbb-dev/jethome-haos-f2fs/dev-jethub/versions/${SUPERVISOR_CHANNEL}.json"
 
 SUPERVISOR_DATA=/mnt/data/supervisor
 SUPERVISOR_STARTUP_MARKER="/run/supervisor/startup-marker"
 SUPERVISOR_CIDFILE="${SUPERVISOR_DATA}/hassio_supervisor.cid"
 SUPERVISOR_STARTSCRIPT_VERSION="/mnt/data/.hassos-supervisor-version"
-#SUPERVISOR_IMAGE="ghcr.io/jethome-homeassistant/${SUPERVISOR_ARCH}-hassio-supervisor"
 SUPERVISOR_IMAGE_BASE="${SUPERVISOR_ARCH}-hassio-supervisor"
 
 #SUPERVISOR_IMAGE_ID=$(docker images --no-trunc --filter "reference=${SUPERVISOR_IMAGE}:latest" --format "{{.ID}}" || echo "")
@@ -131,6 +130,28 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
         -e SUPERVISOR_NAME=hassio_supervisor \
         -e SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE} \
         "${SUPERVISOR_IMAGE}:latest"
+
+    # Patch Supervisor version URL to point to our version JSONs
+    # Uses awk to match by variable name — resilient to upstream URL changes
+    # and handles both single-line and multi-line (parenthesized) assignments
+    _sv_const="/usr/src/supervisor/supervisor/const.py"
+    _sv_url="https://raw.githubusercontent.com/rbb-dev/jethome-haos-f2fs/dev-jethub/versions/{channel}.json"
+    if docker cp "hassio_supervisor:${_sv_const}" /tmp/sv_const.py 2>/dev/null; then
+        awk -v url="${_sv_url}" '
+            /URL_HASSIO_VERSION/ { is_target=1 }
+            is_target && /"https:\/\/[^"]*"/ {
+                sub(/"https:\/\/[^"]*"/, "\"" url "\"")
+                is_target=0
+            }
+            { print }
+        ' /tmp/sv_const.py > /tmp/sv_const_patched.py
+        if grep -q 'raw\.githubusercontent\.com/rbb-dev/jethome-haos-f2fs' /tmp/sv_const_patched.py; then
+            docker cp /tmp/sv_const_patched.py "hassio_supervisor:${_sv_const}"
+        else
+            echo "[WARNING] Failed to patch URL_HASSIO_VERSION in Supervisor const.py — OTA may use upstream channel"
+        fi
+        rm -f /tmp/sv_const.py /tmp/sv_const_patched.py
+    fi
 
     # Store the timestamp of this script. If the script changed, let's
     # recreate the container automatically.

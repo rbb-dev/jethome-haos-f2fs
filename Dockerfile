@@ -53,6 +53,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
+# f2fs-tools with LZ4 compression (Debian's package is built without --with-lz4)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        liblz4-dev uuid-dev libblkid-dev pkg-config libtool \
+    && git clone --depth 1 --branch v1.16.0 \
+        https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git /tmp/f2fs-tools \
+    && cd /tmp/f2fs-tools \
+    && autoreconf -fi \
+    && ./configure --with-lz4 --without-lzo2 --without-selinux \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /tmp/f2fs-tools /var/lib/apt/lists/* \
+    && ldconfig
+
 # Init entry
 COPY scripts/entry.sh /usr/sbin/
 ENTRYPOINT ["/usr/sbin/entry.sh"]

@@ -23,7 +23,7 @@ env:
 jobs:
   prepare:
     name: Prepare build
-    runs-on: ${{ vars.RUNNER }}
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       pull-requests: read
@@ -48,7 +48,7 @@ jobs:
         env:
           PUBLISH_FLAG: ${{ inputs.publish }}
         run: |
-          if [ "${{ github.repository }}" == "jethome-homeassistant/operating-system" ]; then
+          if [ "${{ github.repository }}" == "rbb-dev/jethome-haos-f2fs" ]; then
             if [ "${PUBLISH_FLAG}" != "true" ] && [ "${{ github.event_name }}" != "release" ]; then
               echo "publish_build=false" >> "$GITHUB_OUTPUT"
             else
@@ -163,14 +163,14 @@ jobs:
           push: true
 
   build:
-    name: Build for ${{ matrix.board.id }}
+    name: Build for ${{ matrix.board.family }}
     permissions:
       contents: write  # for actions/upload-release-asset to upload release asset
     needs: prepare
     strategy:
       fail-fast: ${{ github.event_name == 'release' }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    runs-on: ${{ vars.RUNNER }}
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout source
@@ -204,34 +204,46 @@ jobs:
           echo -e "-----BEGIN CERTIFICATE-----\n${RAUC_CERTIFICATE}\n-----END CERTIFICATE-----" > cert.pem
           echo -e "-----BEGIN PRIVATE KEY-----\n${RAUC_PRIVATE_KEY}\n-----END PRIVATE KEY-----" > key.pem
 
-      - name: Add pgp keys
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-
       - name: Free space on build drive
         run: |
-          # Inspired by https://github.com/easimon/maximize-build-space/blob/v7/action.yml
-          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          echo "=== Before cleanup ==="
+          df -h /
+
+          # Remove Android SDK (~14GB)
+          sudo rm -rf /usr/local/lib/android
+
+          # Remove .NET (~2.7GB)
+          sudo rm -rf /usr/share/dotnet
+
+          # Remove Haskell (~2-3GB)
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+
+          # Remove CodeQL only (~5.4GB) - preserve Python/Node for actions
           sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+          # Setup cache directory
           sudo mkdir -p /mnt/cache/dl
-          sudo mkdir /mnt/output
-          sudo chown -R runner:runner /mnt/cache /mnt/output
-          sudo apt-get update; sudo apt-get install -y nfs-client
-          sudo mount -t nfs 10.180.76.22:/cache/buildroot-haos/dl /mnt/cache/dl || true
           WORKSPACE_OWNER="$(stat -c '%U:%G' "${GITHUB_WORKSPACE}")"
-          # output directory is symlinked for easier access from workspace
-          # but for build container it must be mounted as a volume
-          #sudo ln -sf /mnt/output "${GITHUB_WORKSPACE}/output"
           sudo chown -R "${WORKSPACE_OWNER}" /mnt/cache
-          sudo chown -R "${WORKSPACE_OWNER}" /mnt/output
-          df -h
+
+          echo "=== After cleanup ==="
+          df -h /
+
+      - name: Load F2FS kernel module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-modules-extra-$(uname -r)
+          sudo modprobe f2fs
+          lsmod | grep f2fs
 
       - name: "Restore cache: object files"
         uses: actions/cache/restore@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
         with:
           path: /mnt/cache/cc
-          key: haos-cc-${{ matrix.board.id }}
+          key: haos-cc-${{ matrix.board.family }}-${{ github.run_id }}
+          restore-keys: |
+            haos-cc-${{ matrix.board.family }}-
 
       - name: Build
         run: |
@@ -246,14 +258,14 @@ jobs:
 
       - name: Check output
         run: |
-          find output/images/haos*
+          find output/images/haos-f2fs_*
 
       - name: Upload artifacts
         if: ${{ github.event_name != 'release' && needs.prepare.outputs.publish_build == 'true' }}
         uses: burnett01/rsync-deployments@7.1.0
         with:
           rsh: -q
-          switches: -aW --include="haos_*" --exclude="*"
+          switches: -aW --include="haos-f2fs_*" --exclude="*"
           path: "output/images/"
           remote_path: ${{ secrets.DEV_TARGET_PATH }}/${{ needs.prepare.outputs.version_main }}.${{ needs.prepare.outputs.version_dev }}/
           remote_host: ${{ secrets.DEV_HOST }}
@@ -271,72 +283,29 @@ jobs:
             make -C buildroot O="/build/output" BR2_EXTERNAL="/build/buildroot-external" \
             BR2_CHECK_DOTCONFIG_OPTS="--github-format --strip-path-prefix=/build/" linux-check-dotconfig
 
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
+
       - name: Sign images
         env:
-          GPG_PASSPHRASE1: ${{ secrets.GPG_PASSPHRASE1 }}
-        if: env.GPG_PASSPHRASE1 != null
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        if: env.GPG_PRIVATE_KEY != ''
         run: |
-          for image in output/images/haos_${{ matrix.board.id }}-* ; do
-            echo $GPG_PASSPHRASE1 | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes $image
+          for image in output/images/haos-f2fs_${{ matrix.board.id }}-* ; do
+            echo "${GPG_PASSPHRASE}" | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes "$image"
           done
-
-      - name: Deploy to fw.jethome.ru (rauc)
-        id: upload-fw-rauc
-        if: github.event_name == 'release' && github.event.release.prerelease != true || github.ref == 'refs/heads/master'
-        uses: jethome-iot/actions/firmware-upload@master
-        with:
-          url: https://fw.jethome.ru
-          fullslug: "JetHome.${{ matrix.board.family }}.jhaos.${{ needs.prepare.outputs.releasetype }}"
-          image_type: "raucb"
-          firmware_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb"
-          hashpgp_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb.asc"
-          version: "${{ needs.prepare.outputs.version_full }}"
-          force_overwrite: "true"
-          generatefirmwareslot: "true"
-          update_latest: "true"
-          supported_devices: "${{ matrix.board.supported }}"
-          FWUPLOAD: ${{ secrets.FWUPLOAD }}
-
-      - name: Deploy to fw.jethome.ru (sdcard)
-        id: upload-fw-sdcard
-        if: github.event_name == 'release' && github.event.release.prerelease != true || github.ref == 'refs/heads/master'
-        uses: jethome-iot/actions/firmware-upload@master
-        with:
-          url: https://fw.jethome.ru
-          fullslug: "JetHome.${{ matrix.board.family }}.jhaos.${{ needs.prepare.outputs.releasetype }}"
-          image_type: "sdcard"
-          firmware_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz"
-          hashpgp_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz.asc"
-          version: "${{ needs.prepare.outputs.version_full }}"
-          force_overwrite: "true"
-          generatefirmwareslot: "true"
-          update_latest: "true"
-          supported_devices: "${{ matrix.board.supported }}"
-          FWUPLOAD: "${{ secrets.FWUPLOAD }}"
-
-      - name: Deploy to fw.jethome.ru (burn)
-        id: upload-fw-burn
-        if: github.event_name == 'release' && github.event.release.prerelease != true || github.ref == 'refs/heads/master'
-        uses: jethome-iot/actions/firmware-upload@master
-        with:
-          url: https://fw.jethome.ru
-          fullslug: "JetHome.${{ matrix.board.family }}.jhaos.${{ needs.prepare.outputs.releasetype }}"
-          image_type: "burn"
-          firmware_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}_burn.img.zip"
-          hashpgp_file: "output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}_burn.img.zip.asc"
-          version: "${{ needs.prepare.outputs.version_full }}"
-          force_overwrite: "true"
-          generatefirmwareslot: "true"
-          update_latest: "true"
-          supported_devices: "${{ matrix.board.supported }}"
-          FWUPLOAD: ${{ secrets.FWUPLOAD }}
 
       - name: Upload release assets
         if: ${{ github.event_name == 'release' }}
         uses: shogo82148/actions-upload-release-asset@8f6863c6c894ba46f9e676ef5cccec4752723c1e # v1.9.2
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: output/images/haos_*
+          asset_path: output/images/haos-f2fs_*
 
       - name: Print cache stats
         run: |
@@ -347,25 +316,25 @@ jobs:
           echo "Cache size after pruning: $(du -sh /mnt/cache/cc)"
 
       - name: "Save cache: object files"
-        if: github.ref == 'refs/heads/dev-jethub'
+        if: ${{ !cancelled() }}
         uses: actions/cache/save@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
         with:
           path: /mnt/cache/cc
-          key: haos-cc-${{ matrix.board.id }}-${{ github.run_id }}
+          key: haos-cc-${{ matrix.board.family }}-${{ github.run_id }}
 
       - name: Generate build summary
         run: |
-          echo "# ${{ matrix.board.id }} build summary" >> $GITHUB_STEP_SUMMARY
+          echo "# ${{ matrix.board.family }} build summary" >> $GITHUB_STEP_SUMMARY
           echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "| File | Size (bytes) | Size (formatted) |" >> $GITHUB_STEP_SUMMARY
           echo "|:-|:-|:-|" >> $GITHUB_STEP_SUMMARY
-          for f in output/images/haos_*; do
+          for f in output/images/haos-f2fs_*; do
             echo "| $(basename $f) | $(du -b $f | cut -f1) | $(du -bh $f | cut -f1) |" >> $GITHUB_STEP_SUMMARY
           done
           echo "## Partitions" >> $GITHUB_STEP_SUMMARY
           echo "| File | Size (bytes) | Size (formatted) |" >> $GITHUB_STEP_SUMMARY
           echo "|:-|:-|:-|" >> $GITHUB_STEP_SUMMARY
-          for f in boot.vfat kernel.img rootfs.erofs overlay.ext4 data.ext4; do
+          for f in boot.vfat kernel.img rootfs.erofs overlay.ext4 data.f2fs; do
             echo "| ${f} | $(du -b output/images/$f | cut -f1) | $(du -bh output/images/$f | cut -f1) |" >> $GITHUB_STEP_SUMMARY
           done
 
@@ -373,57 +342,22 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ github.event_name != 'release' && needs.prepare.outputs.publish_build != 'true' }}
         with:
-          name: haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
+          name: haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
           path: |
-            output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
+            output/images/haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
 
       - name: Upload RAUC bundle artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ github.event_name != 'release' && needs.prepare.outputs.publish_build != 'true' }}
         with:
-          name: haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
+          name: haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
           path: |
-            output/images/haos_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
+            output/images/haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
 
-  bump_version:
-    name: Bump ${{ needs.prepare.outputs.channel }} channel version
-    if: ${{ github.repository == 'jethome-homeassistant/operating-system' && needs.prepare.outputs.publish_build == 'true' }}
-    needs: [ build, prepare ]
-    runs-on: ${{ vars.RUNNER }}
-
-    steps:
-    - name: Checkout source
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        persist-credentials: false
-
-    - name: Initialize git
-      uses: jethome-homeassistant/actions/helpers/git-init@master-jethub
-      with:
-        name: ${{ secrets.GIT_NAME }}
-        email: ${{ secrets.GIT_EMAIL }}
-        token: ${{ secrets.GIT_TOKEN }}
-
-    - name: Bump Home Assistant OS ${{ needs.prepare.outputs.channel }} channel version
-      uses: jethome-homeassistant/actions/helpers/version-push@master-jethub
-      with:
-        key: "hassos[]"
-        key-description: "Home Assistant OS"
-        version: ${{ needs.prepare.outputs.version_full }}
-        channel: ${{ needs.prepare.outputs.channel }}
-
-    - name: Bump Home Assistant OS beta channel version on stable release
-      if: ${{ needs.prepare.outputs.channel == 'stable' }}
-      uses: jethome-homeassistant/actions/helpers/version-push@master-jethub
-      with:
-        key: "hassos[]"
-        key-description: "Home Assistant OS"
-        version: ${{ needs.prepare.outputs.version_full }}
-        channel: beta
-
-    - name: Bump stable Home Assistant version for RPi Imager
-      if: 0 #${{ github.event_name == 'release' && needs.prepare.outputs.channel == 'stable' }}
-      uses: "./.github/actions/bump-rpi-imager-version"
-      with:
-        version: ${{ needs.prepare.outputs.version_full }}
-        release-date: ${{ github.event.release.published_at }}
+      - name: Upload USB burn image artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ github.event_name != 'release' && needs.prepare.outputs.publish_build != 'true' }}
+        with:
+          name: haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}_burn.img.zip
+          path: |
+            output/images/haos-f2fs_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}_burn.img.zip

@@ -6,19 +6,19 @@ dst_dir=$2
 channel=$3
 docker_version=$4
 
-data_img="${dst_dir}/data.ext4"
+data_img="${dst_dir}/data.f2fs"
 data_dir="${build_dir}/data"
 
-APPARMOR_URL="https://haversion.jethome.com/apparmor.txt"
+APPARMOR_URL="https://version.home-assistant.io/apparmor_stable.txt"
 
 # Make image
 rm -f "${data_img}"
 truncate --size="6000M" "${data_img}"
-mkfs.ext4 -L "hassos-data" -E lazy_itable_init=0,lazy_journal_init=0 "${data_img}"
+mkfs.f2fs -f -l "hassos-data" -O compression,extra_attr "${data_img}"
 
 # Mount / init file structs
 mkdir -p "${data_dir}"
-sudo mount -o loop,discard "${data_img}" "${data_dir}"
+sudo mount -t f2fs -o loop,compress_algorithm=lz4,compress_extension=* "${data_img}" "${data_dir}"
 
 trap 'docker rm -f ${container} > /dev/null; sudo umount ${data_dir} || true' ERR EXIT
 

@@ -17,7 +17,7 @@ if [ -f /etc/default/haos-swapfile ]; then
     # shellcheck disable=SC1091
     . /etc/default/haos-swapfile
 fi
-SWAPFILE="/mnt/data/swapfile"
+SWAPFILE="/mnt/data/file.swap"
 
 # Swap size in kilobytes (as it's also what meminfo shows)
 SWAPSIZE="$(size2kilobytes "${SWAPSIZE}")"
@@ -58,6 +58,8 @@ elif [ ! -s "${SWAPFILE}" ] || [ "${CURRENT_SIZE}" -ne $((SWAPSIZE_BLOCKS * 4096
 
     echo "[INFO] Creating swapfile of size ${SWAPSIZE} kB (rounded to ${SWAPSIZE_BLOCKS} blocks)"
     umask 0077
+    rm -f "${SWAPFILE}"
+    touch "${SWAPFILE}"
     dd if=/dev/zero of="${SWAPFILE}" bs=4k count="${SWAPSIZE_BLOCKS}"
 fi
 

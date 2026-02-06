@@ -34,16 +34,16 @@ if [ "${NEW_DEVICE_PART_SIZE}" -lt "${OLD_DEVICE_PART_SIZE}" ]; then
 fi
 
 echo "[INFO] Moving data from ${OLD_DEVICE_CHILD} to ${NEW_DEVICE_CHILD}"
-if ! e2image -ra -p "${OLD_DEVICE_CHILD}" "${NEW_DEVICE_CHILD}"; then
+if ! dd if="${OLD_DEVICE_CHILD}" of="${NEW_DEVICE_CHILD}" bs=4M conv=fsync; then
     echo "[ERROR] Copying data partition to external device failed!"
     # Rename partition to make sure HAOS does not try to mount a failed copy attempt.
-    e2label "${NEW_DEVICE_CHILD}" hassos-data-fail || true
+    tune.f2fs -l hassos-data-fail "${NEW_DEVICE_CHILD}" || true
     exit 1
 fi
 
 # At this point we have two partition with the same fs label. Make sure
 # to rename the internal partition so we won't mount it anymore.
 echo "[INFO] Rename old hassos-data partition ${OLD_DEVICE_CHILD}"
-e2label "${OLD_DEVICE_CHILD}" hassos-data-old
+tune.f2fs -l hassos-data-old "${OLD_DEVICE_CHILD}"
 
 echo "[INFO] Data move has been completed successfully"

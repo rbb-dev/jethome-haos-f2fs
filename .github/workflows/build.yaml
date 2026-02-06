@@ -38,6 +38,8 @@ env:
 jobs:
   prepare:
     name: Prepare build
+    # Only run on upstream repo - forks use jh-build.yaml
+    if: github.repository == 'home-assistant/operating-system'
     runs-on: ubuntu-22.04
     permissions:
       contents: read
