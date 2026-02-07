@@ -45,12 +45,15 @@ echo "[INFO] Data partition end block ${DATA_PARTITION_END}"
 UNUSED_BLOCKS=$(( LAST_USABLE_LBA - DATA_PARTITION_END ))
 if [ "${UNUSED_BLOCKS}" -le "16384" ]; then
     echo "[INFO] No resize of data partition needed"
+    # Filesystem might still need resizing (partition expanded on previous boot)
+    echo "[INFO] Resizing F2FS filesystem on ${DEVICE_CHILD}"
+    resize.f2fs "${DEVICE_CHILD}" 2>/dev/null || true
     exit 0
 fi
 
 echo "[INFO] Update hassos-data partition ${PART_NUM}"
 echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${PART_NUM}" "${DEVICE_ROOT}"
-sfdisk -V "${DEVICE_ROOT}"
+sfdisk -V "${DEVICE_ROOT}" || echo "[WARNING] Partition table verification failed (non-fatal on MBR)"
 
 # Update the kernel's partition table
 partx -u "${DEVICE_ROOT}"

@@ -3,11 +3,12 @@ Description=HAOS swap
 DefaultDependencies=no
 Requires=etc-default.mount mnt-data.mount
 After=etc-default.mount mnt-data.mount
-Before=mnt-data-file.swap
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/libexec/haos-swapfile
+ExecStop=swapoff /mnt/data/file.swap
 
 [Install]
 WantedBy=swap.target

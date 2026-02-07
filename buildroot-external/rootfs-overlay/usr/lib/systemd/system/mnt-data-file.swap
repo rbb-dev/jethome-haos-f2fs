@@ -1,9 +1,0 @@
-[Unit]
-Description=HAOS swap file
-ConditionFileNotEmpty=/mnt/data/file.swap
-
-[Swap]
-What=/mnt/data/file.swap
-
-[Install]
-WantedBy=swap.target
